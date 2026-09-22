@@ -1,0 +1,4 @@
+fastapi[standard]
+passlib[bcrypt]==1.7.4
+PyJWT
+bcrypt==3.2.2
