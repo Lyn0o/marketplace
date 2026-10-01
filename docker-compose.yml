@@ -6,7 +6,6 @@ services:
       - "8500:8500"
     command: agent -server -ui -bootstrap-expect=1 -client "0.0.0.0"
 
-
   auth:
     build: ./auth_service
     container_name: auth
@@ -15,6 +14,28 @@ services:
       - INSTANCE_ID=auth-1
       - PORT=8001
       - SERVICE_HOST=auth
+      - CONSUL_URL=http://consul:8500
+    depends_on:
+      - consul
+
+  catalog-1:
+    build: ./catalog_service
+    container_name: catalog-1
+    environment:
+      - INSTANCE_ID=catalog-1
+      - PORT=8002
+      - SERVICE_HOST=catalog-1
+      - CONSUL_URL=http://consul:8500
+    depends_on:
+      - consul
+
+  catalog-2:
+    build: ./catalog_service
+    container_name: catalog-2
+    environment:
+      - INSTANCE_ID=catalog-2
+      - PORT=8003
+      - SERVICE_HOST=catalog-2
       - CONSUL_URL=http://consul:8500
     depends_on:
       - consul
@@ -28,29 +49,5 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - auth
-
-  # (CATALOG SERVICE)
-  
-  # catalog-1:
-  #   build: ./catalog_service
-  #   container_name: catalog-1
-  #   environment:
-  #     - INSTANCE_NAME=catalog-1
-  #     - INSTANCE_ID=catalog-1
-  #     - PORT=8002
-  #     - SERVICE_HOST=catalog-1
-  #     - CONSUL_URL=http://consul:8500
-  #   depends_on:
-  #     - consul
-
-  # catalog-2:
-  #   build: ./catalog_service
-  #   container_name: catalog-2
-  #   environment:
-  #     - INSTANCE_NAME=catalog-2
-  #     - INSTANCE_ID=catalog-2
-  #     - PORT=8003
-  #     - SERVICE_HOST=catalog-2
-  #     - CONSUL_URL=http://consul:8500
-  #   depends_on:
-  #     - consul
+      - catalog-1
+      - catalog-2
