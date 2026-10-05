@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
     yield
     deregister_from_consul()
 
-app = FastAPI(title="Auth Service", lifespan=lifespan)
+app = FastAPI(title="Auth Service", lifespan=lifespan, root_path="/auth")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 

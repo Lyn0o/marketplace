@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
     yield
     deregister_from_consul()
 
-app = FastAPI(title="Catalog Service", lifespan=lifespan)
+app = FastAPI(title="Catalog Service", lifespan=lifespan, root_path="/catalog")
 
 @app.get("/health")
 def health_check():
