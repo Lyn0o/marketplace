@@ -51,3 +51,16 @@ services:
       - auth
       - catalog-1
       - catalog-2
+  
+  graphql:
+    build: ./graphql_gateway
+    container_name: graphql
+    environment:
+      - SERVICE_NAME=graphql-gateway
+      - INSTANCE_ID=graphql-1
+      - PORT=8005
+      - SERVICE_HOST=graphql
+      - CONSUL_URL=http://consul:8500
+    depends_on:
+      - consul
+      - catalog-1
