@@ -1,4 +1,4 @@
 fastapi
-uvicorn
-strawberry-graphql
+uvicorn[standard]
+strawberry-graphql[fastapi]
 httpx

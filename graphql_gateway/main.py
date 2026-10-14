@@ -1,82 +1,121 @@
-import strawberry
-import httpx
+import strawberry, httpx, asyncio
+from typing import AsyncGenerator
 from fastapi import FastAPI
 from strawberry.fastapi import GraphQLRouter
+from datetime import datetime, timezone
 
-
-@strawberry.type(description="Товар из каталога")
-class Product:
-    id: int = strawberry.field(description="Уникальный идентификатор товара")
-    name: str = strawberry.field(description="Название товара")
-    price: float = strawberry.field(description="Цена товара в рублях")
-
-@strawberry.type(description="Позиция (строка) в заказе")
-class OrderItem:
-    product: Product = strawberry.field(description="Информация о товаре")
-    quantity: int = strawberry.field(description="Количество единиц товара")
-
-@strawberry.type(description="Заказ пользователя")
-class Order:
-    id: int = strawberry.field(description="Уникальный идентификатор заказа")
-    user_id: int = strawberry.field(description="ID пользователя, сделавшего заказ")
-    created_at: str = strawberry.field(description="Дата и время создания заказа")
-    items: list[OrderItem] = strawberry.field(description="Список товаров в заказе")
-
-
-async def get_catalog_products() -> dict[int, Product]:
-    """Получаем товары из Catalog сервиса и возвращаем словарь {id: Product} для быстрого поиска"""
-    async with httpx.AsyncClient() as client:
-        response = await client.get("http://catalog-1:8002/products")
-        if response.status_code == 200:
-            data = response.json()
-            return {p["id"]: Product(**p) for p in data.get("products", [])}
-    return {}
-
-async def get_mock_orders(user_id: int) -> list[dict]:
-    """Моковые заказы. Фильтруем по user_id."""
-    all_orders = [
-        {"id": 1, "user_id": 1, "created_at": "2024-01-15", "items": [{"product_id": 1, "quantity": 2}]},
-        {"id": 2, "user_id": 1, "created_at": "2024-01-16", "items": [{"product_id": 2, "quantity": 1}]},
-        {"id": 3, "user_id": 2, "created_at": "2024-01-17", "items": [{"product_id": 1, "quantity": 1}]},
-    ]
-    return [order for order in all_orders if order["user_id"] == user_id]
-
+ORDER_URL = "http://order:8003"
 
 @strawberry.type
+class Product:
+    id: int
+    name: str
+    price: float
+
+@strawberry.type
+class OrderItem:
+    product: Product
+    quantity: int
+
+@strawberry.type
+class Order:
+    id: str
+    user_id: str
+    created_at: str
+    status: str
+    items: list[OrderItem]
+
+@strawberry.type
+class OrderStatusEvent:
+    order_id: str
+    status: str
+    at: str
+
+# ---------- QUERY ----------
+@strawberry.type
 class Query:
-    @strawberry.field(description="Получить все заказы пользователя с деталями товаров")
-    async def orders_by_user_id(self, user_id: int) -> list[Order]:
-        raw_orders = await get_mock_orders(user_id)
-        
-        products_dict = await get_catalog_products()
-        
-        result_orders = []
-        for raw_order in raw_orders:
-            order_items = []
-            for item in raw_order["items"]:
-                product = products_dict.get(item["product_id"])
-                if product:
-                    order_items.append(OrderItem(
-                        product=product,
-                        quantity=item["quantity"]
-                    ))
-            
-            result_orders.append(Order(
-                id=raw_order["id"],
-                user_id=raw_order["user_id"],
-                created_at=raw_order["created_at"],
-                items=order_items
-            ))
-            
-        return result_orders
+    @strawberry.field
+    async def orders(self) -> list[Order]:
+        async with httpx.AsyncClient() as c:
+            r = await c.get(f"{ORDER_URL}/orders/")
+            data = r.json().get("orders", [])
+        return [
+            Order(
+                id=o["orderId"], user_id=o["userId"],
+                created_at=o["createdAt"], status=o["status"],
+                items=[
+                    OrderItem(
+                        product=Product(id=hash(i["productId"]) % 10000, name=i["productId"], price=0),
+                        quantity=i["quantity"],
+                    ) for i in o["items"]
+                ],
+            )
+            for o in data
+        ]
 
+    @strawberry.field
+    async def order(self, order_id: str) -> Order | None:
+        async with httpx.AsyncClient() as c:
+            r = await c.get(f"{ORDER_URL}/orders/{order_id}")
+            if r.status_code != 200: return None
+            o = r.json()
+        return Order(
+            id=o["orderId"], user_id=o["userId"],
+            created_at=o["createdAt"], status=o["status"],
+            items=[],
+        )
 
-schema = strawberry.Schema(query=Query)
+# ---------- MUTATION ----------
+@strawberry.input
+class OrderItemInput:
+    productId: str
+    quantity: int
+
+@strawberry.type
+class Mutation:
+    @strawberry.mutation
+    async def create_order(self, user_id: str, total_amount: float, items: list[OrderItemInput]) -> Order:
+        payload = {
+            "userId": user_id,
+            "totalAmount": total_amount,
+            "items": [{"productId": i.productId, "quantity": i.quantity} for i in items],
+        }
+        async with httpx.AsyncClient() as c:
+            r = await c.post(f"{ORDER_URL}/orders/", json=payload)
+        o = r.json()
+        return Order(id=o["orderId"], user_id=o["userId"], created_at=o["createdAt"],
+                     status=o["status"], items=[])
+
+# ---------- SUBSCRIPTION ----------
+@strawberry.type
+class Subscription:
+    @strawberry.subscription
+    async def order_status(self, order_id: str) -> AsyncGenerator[OrderStatusEvent, None]:
+        """Стрим статуса заказа — клиент видит переходы PENDING → CONFIRMED/CANCELLED."""
+        last = None
+        for _ in range(60):  # максимум минуту
+            try:
+                async with httpx.AsyncClient() as c:
+                    r = await c.get(f"{ORDER_URL}/orders/{order_id}")
+                    if r.status_code == 200:
+                        st = r.json()["status"]
+                        if st != last:
+                            last = st
+                            yield OrderStatusEvent(
+                                order_id=order_id, status=st,
+                                at=datetime.now(timezone.utc).isoformat(),
+                            )
+                            if st in ("CONFIRMED", "CANCELLED"):
+                                return
+            except Exception as e:
+                print("[Sub]", e)
+            await asyncio.sleep(1)
+
+schema = strawberry.Schema(query=Query, mutation=Mutation, subscription=Subscription)
 graphql_app = GraphQLRouter(schema)
 
 app = FastAPI(title="GraphQL Gateway")
 app.include_router(graphql_app, prefix="/graphql")
 
 @app.get("/health")
-def health_check():
-    return {"status": "healthy", "service": "graphql-gateway"}
+def health(): return {"status": "healthy", "service": "graphql-gateway"}
