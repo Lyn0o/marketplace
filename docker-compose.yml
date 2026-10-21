@@ -4,7 +4,7 @@ services:
     container_name: consul
     ports: ["8500:8500"]
     command: agent -server -ui -bootstrap-expect=1 -client "0.0.0.0"
-    restart: unless-stopped          # ← добавил
+    restart: unless-stopped
 
   rabbitmq:
     image: rabbitmq:3-management
@@ -20,7 +20,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    restart: unless-stopped          # ← добавил
+    restart: unless-stopped
 
   auth:
     build: ./auth_service
@@ -32,7 +32,7 @@ services:
       - SERVICE_HOST=auth
       - CONSUL_URL=http://consul:8500
     depends_on: [consul]
-    restart: on-failure              # ← добавил
+    restart: on-failure
 
   catalog-1:
     build: ./catalog_service
@@ -43,7 +43,7 @@ services:
       - SERVICE_HOST=catalog-1
       - CONSUL_URL=http://consul:8500
     depends_on: [consul]
-    restart: on-failure              # ← добавил
+    restart: on-failure
 
   catalog-2:
     build: ./catalog_service
@@ -54,7 +54,7 @@ services:
       - SERVICE_HOST=catalog-2
       - CONSUL_URL=http://consul:8500
     depends_on: [consul]
-    restart: on-failure              # ← добавил
+    restart: on-failure
 
   order:
     build: ./order_service
@@ -69,11 +69,13 @@ services:
     depends_on:
       rabbitmq: {condition: service_healthy}
       consul:   {condition: service_started}
-    restart: on-failure              # ← добавил (главное — сюда)
+    restart: on-failure
 
   payment:
     build: ./payment_service
     container_name: payment
+    ports:
+      - "50051:50051"
     environment:
       - SERVICE_NAME=payment-service
       - INSTANCE_ID=payment-1
@@ -85,7 +87,7 @@ services:
     depends_on:
       rabbitmq: {condition: service_healthy}
       consul:   {condition: service_started}
-    restart: on-failure              # ← добавил (главное — сюда)
+    restart: on-failure
 
   notification:
     build: ./notification_service
@@ -100,7 +102,7 @@ services:
     depends_on:
       rabbitmq: {condition: service_healthy}
       consul:   {condition: service_started}
-    restart: on-failure              # ← добавил (главное — сюда)
+    restart: on-failure
 
   nginx:
     image: nginx:latest
@@ -109,7 +111,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
     depends_on: [auth, catalog-1, catalog-2, order, payment, notification]
-    restart: unless-stopped          # ← добавил
+    restart: unless-stopped
 
   graphql:
     build: ./graphql_gateway
@@ -121,4 +123,4 @@ services:
       - SERVICE_HOST=graphql
       - CONSUL_URL=http://consul:8500
     depends_on: [consul, order]
-    restart: on-failure              # ← добавил
+    restart: on-failure

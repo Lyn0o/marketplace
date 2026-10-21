@@ -3,3 +3,6 @@ uvicorn[standard]
 pydantic
 requests
 aio-pika
+grpcio
+grpcio-tools
+pybreaker

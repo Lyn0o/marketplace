@@ -7,6 +7,9 @@ from pydantic import BaseModel
 from datetime import datetime, timezone
 from typing import List
 
+# Импорт клиента gRPC
+from grpc_client import safe_check_payment
+
 SERVICE_NAME = os.getenv("SERVICE_NAME", "order-service")
 INSTANCE_ID  = os.getenv("INSTANCE_ID", "order-1")
 SERVICE_PORT = int(os.getenv("PORT", 8003))
@@ -170,3 +173,13 @@ async def create_order(order: OrderCreate):
     orders_db[oid] = new_order
     await publish("OrderCreated", new_order)
     return new_order
+
+# --- ЭНДПОИНТ ДЛЯ ЛР5 (gRPC + Circuit Breaker) ---
+@app.get("/check-payment/{order_id}")
+def check_payment(order_id: str, amount: float = 100.0, simulate_failure: bool = False):
+    """
+    Эндпоинт для тестирования gRPC-вызова и Circuit Breaker.
+    Пример: /check-payment/123?simulate_failure=true
+    """
+    result = safe_check_payment(order_id, amount, simulate_failure)
+    return result
