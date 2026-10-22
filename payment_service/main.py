@@ -17,6 +17,7 @@ RABBIT_URL   = os.getenv("RABBIT_URL", "amqp://guest:guest@rabbitmq/")
 
 prepared, committed = {}, {}
 rabbit_conn, rabbit_ch, rabbit_ex = None, None, None
+grpc_server = None
 
 class PaymentServiceServicer(payment_pb2_grpc.PaymentServiceServicer):
     def CheckPaymentStatus(self, request, context):
@@ -37,11 +38,12 @@ class PaymentServiceServicer(payment_pb2_grpc.PaymentServiceServicer):
             message="Payment checked successfully"
         )
 
-def serve_grpc():
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    payment_pb2_grpc.add_PaymentServiceServicer_to_server(PaymentServiceServicer(), server)
-    server.add_insecure_port('[::]:50051')
-    server.start()
+def start_grpc_server():
+    global grpc_server
+    grpc_server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    payment_pb2_grpc.add_PaymentServiceServicer_to_server(PaymentServiceServicer(), grpc_server)
+    grpc_server.add_insecure_port('[::]:50051')
+    grpc_server.start()
     print("[gRPC] Server started on port 50051", flush=True)
 
 async def ensure_connection():
@@ -123,9 +125,12 @@ async def start_consumer_with_retry(attempts: int = 15, delay: float = 2.0):
 
 @asynccontextmanager
 async def lifespan(app):
-    serve_grpc()
+    global grpc_server
+    start_grpc_server()
     await start_consumer_with_retry()
     yield
+    if grpc_server:
+        grpc_server.stop(0)
     if rabbit_conn and not rabbit_conn.is_closed: 
         await rabbit_conn.close()
 
