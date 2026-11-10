@@ -1,23 +1,21 @@
 import os, json, uuid, asyncio
 import requests
-import aio_pika
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from datetime import datetime, timezone
-from typing import List
-
-# Импорт клиента gRPC
-from grpc_client import safe_check_payment
+from typing import List, Optional
+from aiokafka import AIOKafkaProducer
 
 SERVICE_NAME = os.getenv("SERVICE_NAME", "order-service")
 INSTANCE_ID  = os.getenv("INSTANCE_ID", "order-1")
 SERVICE_PORT = int(os.getenv("PORT", 8003))
 CONSUL_URL   = os.getenv("CONSUL_URL", "http://consul:8500")
 SERVICE_HOST = os.getenv("SERVICE_HOST", "order")
-RABBIT_URL   = os.getenv("RABBIT_URL", "amqp://guest:guest@rabbitmq/")
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 
-orders_db = {}
+event_store = []
+read_model = {}
 
 class OrderItem(BaseModel):
     productId: str
@@ -28,158 +26,125 @@ class OrderCreate(BaseModel):
     items: List[OrderItem]
     totalAmount: float
 
-def register_to_consul():
-    payload = {
-        "ID": INSTANCE_ID, "Name": SERVICE_NAME,
-        "Address": SERVICE_HOST, "Port": SERVICE_PORT,
-        "Check": {"HTTP": f"http://{SERVICE_HOST}:{SERVICE_PORT}/health", "Interval": "10s"}
-    }
-    try:
-        requests.put(f"{CONSUL_URL}/v1/agent/service/register", json=payload, timeout=3)
-    except Exception as e:
-        print("[Consul] register error:", e)
+def rehydrate(order_id: str) -> Optional[dict]:
+    events = [e for e in event_store if e["order_id"] == order_id]
+    if not events: return None
+    
+    state = {"order_id": order_id, "status": "CREATED", "items": [], "totalAmount": 0.0, "version": 0}
+    for event in sorted(events, key=lambda x: x["version"]):
+        if event["event_type"] == "OrderCreated":
+            state["status"] = "CREATED"
+            state["items"] = event["payload"].get("items", [])
+            state["totalAmount"] = event["payload"].get("totalAmount", 0.0)
+        elif event["event_type"] == "OrderPaid":
+            state["status"] = "PAID"
+            state["transaction_id"] = event["payload"].get("transaction_id")
+        elif event["event_type"] == "OrderCancelled":
+            state["status"] = "CANCELLED"
+            state["reason"] = event["payload"].get("reason", "Unknown")
+        state["version"] = event["version"]
+    return state
 
-def deregister_from_consul():
-    try:
-        requests.put(f"{CONSUL_URL}/v1/agent/service/deregister/{INSTANCE_ID}", timeout=3)
-    except Exception as e:
-        print("[Consul] deregister error:", e)
+def update_read_model(event: dict):
+    state = rehydrate(event["order_id"])
+    if state: read_model[event["order_id"]] = state
 
-rabbit_conn = None
-rabbit_ch = None
-rabbit_ex = None
+kafka_producer: Optional[AIOKafkaProducer] = None
 
-async def ensure_connection():
-    """Гарантирует живое соединение с RabbitMQ. При необходимости — реконнект."""
-    global rabbit_conn, rabbit_ch, rabbit_ex
-    if rabbit_conn is None or rabbit_conn.is_closed:
-        rabbit_conn = await aio_pika.connect_robust(RABBIT_URL)
-        rabbit_ch = await rabbit_conn.channel()
-        rabbit_ex = await rabbit_ch.declare_exchange(
-            "saga", aio_pika.ExchangeType.TOPIC, durable=True
+async def get_kafka_producer() -> AIOKafkaProducer:
+    global kafka_producer
+    if kafka_producer is None:
+        print("[Kafka] Initializing producer (Lazy)...")
+        kafka_producer = AIOKafkaProducer(
+            bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+            value_serializer=lambda v: json.dumps(v).encode('utf-8')
         )
-        print("[Order] RabbitMQ connected")
+        await kafka_producer.start()
+        print("[Kafka] Producer started successfully!")
+    return kafka_producer
 
-async def publish(rk, payload):
-    await ensure_connection()
-    print(f"[Order PUBLISH] {rk}: {payload}")
-    await rabbit_ex.publish(
-        aio_pika.Message(body=json.dumps(payload).encode()),
-        routing_key=rk,
-    )
+async def publish_event_to_kafka(event: dict):
+    producer = await get_kafka_producer()
+    print(f"[Kafka] Publishing: {event['event_type']} for {event['order_id']}")
+    await producer.send_and_wait("orders-events", event)
 
-# ---------- 2PC ФАЗА 2: решение координатора ----------
-async def on_payment_prepared(message):
-    async with message.process():
-        data = json.loads(message.body)
-        oid = data["orderId"]
-        order = orders_db.get(oid)
-        if not order or order["status"] != "PENDING":
-            return
-        if order["totalAmount"] <= 0:
-            print(f"[Order 2PC] ABORT {oid}: некорректная сумма")
-            await publish("AbortPayment", {"orderId": oid, "reason": "invalid amount"})
-            return
-        print(f"[Order 2PC] COMMIT {oid}")
-        await publish("CommitPayment", {"orderId": oid})
-
-async def on_payment_completed(message):
-    async with message.process():
-        data = json.loads(message.body)
-        oid = data["orderId"]
-        order = orders_db.get(oid)
-        if not order or order["status"] == "CONFIRMED":
-            return  # идемпотентность
-        order["status"] = "CONFIRMED"
-        order["transactionId"] = data.get("transactionId")
-        print(f"[Order] {oid} → CONFIRMED")
-
-async def on_payment_failed(message):
-    """КОМПЕНСАЦИЯ: заказ не должен навсегда остаться в PENDING."""
-    async with message.process():
-        data = json.loads(message.body)
-        oid = data["orderId"]
-        order = orders_db.get(oid)
-        if not order or order["status"] == "CANCELLED":
-            return
-        order["status"] = "CANCELLED"
-        order["reason"] = data.get("reason", "payment failed")
-        print(f"[Order] {oid} → CANCELLED (компенсация): {order['reason']}")
-        await publish("OrderCancelled", {
-            "orderId": oid,
-            "userId": order["userId"],
-            "reason": order["reason"],
-        })
-
-async def start_consumer_with_retry(attempts: int = 15, delay: float = 2.0):
-    """Подключение к RabbitMQ с ретраями — брокер может стартовать дольше сервисов."""
-    for i in range(1, attempts + 1):
-        try:
-            await ensure_connection()
-            q_prep = await rabbit_ch.declare_queue("order.payment.prepared", durable=True)
-            await q_prep.bind(rabbit_ex, routing_key="PreparedPayment")
-            await q_prep.consume(on_payment_prepared)
-
-            q_ok = await rabbit_ch.declare_queue("order.payment.completed", durable=True)
-            await q_ok.bind(rabbit_ex, routing_key="PaymentCompleted")
-            await q_ok.consume(on_payment_completed)
-
-            q_fail = await rabbit_ch.declare_queue("order.payment.failed", durable=True)
-            await q_fail.bind(rabbit_ex, routing_key="PaymentFailed")
-            await q_fail.consume(on_payment_failed)
-
-            print("[Order] consumer started, queues bound")
-            return
-        except Exception as e:
-            print(f"[Order] RabbitMQ connect attempt {i}/{attempts} failed: {e}")
-            await asyncio.sleep(delay)
-    print("[Order] WARNING: consumer not started, but service continues")
+def register_to_consul():
+    try:
+        requests.put(f"{CONSUL_URL}/v1/agent/service/register", json={
+            "ID": INSTANCE_ID, "Name": SERVICE_NAME, "Address": SERVICE_HOST, "Port": SERVICE_PORT,
+            "Check": {"HTTP": f"http://{SERVICE_HOST}:{SERVICE_PORT}/health", "Interval": "10s"}
+        }, timeout=3)
+    except Exception: pass
 
 @asynccontextmanager
-async def lifespan(app):
+async def lifespan(app: FastAPI):
     register_to_consul()
-    await start_consumer_with_retry()
     yield
-    if rabbit_conn and not rabbit_conn.is_closed:
-        await rabbit_conn.close()
-    deregister_from_consul()
+    if kafka_producer is not None: await kafka_producer.stop()
 
-app = FastAPI(title="Order Service", lifespan=lifespan, root_path="/orders")
+# ВАЖНО: НЕТ root_path="/orders" !!!
+app = FastAPI(title="Order Service (CQRS + Event Sourcing)", lifespan=lifespan)
 
+# --- READ SIDE (Сначала конкретные пути!) ---
 @app.get("/health")
 def health(): return {"status": "healthy", "instance": INSTANCE_ID}
 
 @app.get("/")
-def list_orders(): return {"orders": list(orders_db.values())}
+async def list_orders(): return {"orders": list(read_model.values())}
 
-@app.get("/{order_id}")
-def get_order(order_id: str):
-    if order_id not in orders_db:
-        raise HTTPException(404, "Order not found")
-    return orders_db[order_id]
+@app.get("/_debug/event-store")
+async def debug_event_store(): return {"events": event_store}
 
+@app.get("/{order_id}") # ВСЕГДА ПОСЛЕДНИМ!
+async def get_order(order_id: str):
+    if order_id not in read_model:
+        raise HTTPException(status_code=404, detail="Order not found in read model")
+    return read_model[order_id]
+
+# --- WRITE SIDE ---
 @app.post("/", status_code=201)
-async def create_order(order: OrderCreate):
-    """КОД ПУБЛИКАЦИИ OrderCreated — старт саги и 2PC фазы 1."""
-    oid = str(uuid.uuid4())
-    new_order = {
-        "orderId": oid,
-        "userId": order.userId,
-        "items": [i.dict() for i in order.items],
-        "totalAmount": order.totalAmount,
-        "status": "PENDING",
-        "createdAt": datetime.now(timezone.utc).isoformat(),
+async def create_order(command: OrderCreate):
+    order_id = str(uuid.uuid4())
+    event = {
+        "event_id": str(uuid.uuid4()), "order_id": order_id, "event_type": "OrderCreated",
+        "payload": {"userId": command.userId, "items": [item.model_dump() for item in command.items], "totalAmount": command.totalAmount},
+        "timestamp": datetime.now(timezone.utc).isoformat(), "version": 1
     }
-    orders_db[oid] = new_order
-    await publish("OrderCreated", new_order)
-    return new_order
+    event_store.append(event)
+    update_read_model(event)
+    await publish_event_to_kafka(event)
+    return {"message": "Order created", "order_id": order_id, "status": "CREATED"}
 
-# --- ЭНДПОИНТ ДЛЯ ЛР5 (gRPC + Circuit Breaker) ---
-@app.get("/check-payment/{order_id}")
-def check_payment(order_id: str, amount: float = 100.0, simulate_failure: bool = False):
-    """
-    Эндпоинт для тестирования gRPC-вызова и Circuit Breaker.
-    Пример: /check-payment/123?simulate_failure=true
-    """
-    result = safe_check_payment(order_id, amount, simulate_failure)
-    return result
+@app.post("/{order_id}/pay", status_code=200)
+async def pay_order(order_id: str):
+    state = rehydrate(order_id)
+    if not state: raise HTTPException(status_code=404, detail="Order not found")
+    if state["status"] == "PAID": raise HTTPException(status_code=400, detail="Order is already paid")
+    if state["status"] == "CANCELLED": raise HTTPException(status_code=400, detail="Cannot pay a cancelled order")
+    
+    event = {
+        "event_id": str(uuid.uuid4()), "order_id": order_id, "event_type": "OrderPaid",
+        "payload": {"transaction_id": str(uuid.uuid4()), "amount": state["totalAmount"]},
+        "timestamp": datetime.now(timezone.utc).isoformat(), "version": state["version"] + 1
+    }
+    event_store.append(event)
+    update_read_model(event)
+    await publish_event_to_kafka(event)
+    return {"message": "Order paid successfully", "status": "PAID"}
+
+@app.post("/{order_id}/cancel", status_code=200)
+async def cancel_order(order_id: str, reason: str = "Cancelled by user"):
+    state = rehydrate(order_id)
+    if not state: raise HTTPException(status_code=404, detail="Order not found")
+    if state["status"] == "CANCELLED": raise HTTPException(status_code=400, detail="Order is already cancelled")
+    if state["status"] == "PAID": raise HTTPException(status_code=400, detail="Cannot cancel already paid order")
+
+    event = {
+        "event_id": str(uuid.uuid4()), "order_id": order_id, "event_type": "OrderCancelled",
+        "payload": {"reason": reason},
+        "timestamp": datetime.now(timezone.utc).isoformat(), "version": state["version"] + 1
+    }
+    event_store.append(event)
+    update_read_model(event)
+    await publish_event_to_kafka(event)
+    return {"message": "Order cancelled", "status": "CANCELLED"}

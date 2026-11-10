@@ -6,3 +6,4 @@ aio-pika
 grpcio
 grpcio-tools
 pybreaker
+aiokafka==0.10.0
