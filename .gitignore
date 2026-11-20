@@ -4,3 +4,7 @@
 venv/
 .vscode/
 .env
+.pytest_cache/
+*.db
+*.db-shm
+*.db-wal

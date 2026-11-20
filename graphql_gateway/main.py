@@ -2,6 +2,7 @@ import strawberry, httpx, asyncio
 from typing import AsyncGenerator
 from fastapi import FastAPI
 from strawberry.fastapi import GraphQLRouter
+from strawberry.types import Info
 from datetime import datetime, timezone
 
 ORDER_URL = "http://order:8003"
@@ -35,9 +36,10 @@ class OrderStatusEvent:
 @strawberry.type
 class Query:
     @strawberry.field
-    async def orders(self) -> list[Order]:
-        async with httpx.AsyncClient() as c:
-            r = await c.get(f"{ORDER_URL}/orders/")
+    async def orders(self, info: Info) -> list[Order]:
+        async with httpx.AsyncClient(headers={"Authorization": info.context["request"].headers.get("authorization", "")}) as c:
+            r = await c.get(f"{ORDER_URL}/")
+            r.raise_for_status()
             data = r.json().get("orders", [])
         return [
             Order(
@@ -54,11 +56,12 @@ class Query:
         ]
 
     @strawberry.field
-    async def order(self, order_id: str) -> Order | None:
-        async with httpx.AsyncClient() as c:
-            r = await c.get(f"{ORDER_URL}/orders/{order_id}")
+    async def order(self, info: Info, order_id: str) -> Order | None:
+        async with httpx.AsyncClient(headers={"Authorization": info.context["request"].headers.get("authorization", "")}) as c:
+            r = await c.get(f"{ORDER_URL}/{order_id}")
             if r.status_code != 200: return None
-            o = r.json()
+            r.raise_for_status()
+        o = r.json()
         return Order(
             id=o["orderId"], user_id=o["userId"],
             created_at=o["createdAt"], status=o["status"],
@@ -74,14 +77,15 @@ class OrderItemInput:
 @strawberry.type
 class Mutation:
     @strawberry.mutation
-    async def create_order(self, user_id: str, total_amount: float, items: list[OrderItemInput]) -> Order:
+    async def create_order(self, info: Info, user_id: str, total_amount: float, items: list[OrderItemInput]) -> Order:
         payload = {
             "userId": user_id,
             "totalAmount": total_amount,
             "items": [{"productId": i.productId, "quantity": i.quantity} for i in items],
         }
-        async with httpx.AsyncClient() as c:
-            r = await c.post(f"{ORDER_URL}/orders/", json=payload)
+        async with httpx.AsyncClient(headers={"Authorization": info.context["request"].headers.get("authorization", "")}) as c:
+            r = await c.post(f"{ORDER_URL}/", json=payload)
+        r.raise_for_status()
         o = r.json()
         return Order(id=o["orderId"], user_id=o["userId"], created_at=o["createdAt"],
                      status=o["status"], items=[])
@@ -90,13 +94,13 @@ class Mutation:
 @strawberry.type
 class Subscription:
     @strawberry.subscription
-    async def order_status(self, order_id: str) -> AsyncGenerator[OrderStatusEvent, None]:
-        """Стрим статуса заказа — клиент видит переходы PENDING → CONFIRMED/CANCELLED."""
+    async def order_status(self, info: Info, order_id: str) -> AsyncGenerator[OrderStatusEvent, None]:
+        """Стрим статуса заказа — клиент видит переходы CREATED → PAID/CANCELLED."""
         last = None
         for _ in range(60):  # максимум минуту
             try:
-                async with httpx.AsyncClient() as c:
-                    r = await c.get(f"{ORDER_URL}/orders/{order_id}")
+                async with httpx.AsyncClient(headers={"Authorization": info.context["request"].headers.get("authorization", "")}) as c:
+                    r = await c.get(f"{ORDER_URL}/{order_id}")
                     if r.status_code == 200:
                         st = r.json()["status"]
                         if st != last:
@@ -105,7 +109,7 @@ class Subscription:
                                 order_id=order_id, status=st,
                                 at=datetime.now(timezone.utc).isoformat(),
                             )
-                            if st in ("CONFIRMED", "CANCELLED"):
+                            if st in ("PAID", "CANCELLED"):
                                 return
             except Exception as e:
                 print("[Sub]", e)
