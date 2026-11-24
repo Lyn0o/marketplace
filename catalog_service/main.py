@@ -1,80 +1,55 @@
 import os
-import requests
+import json
+import sqlite3
+from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional
+from fastapi import FastAPI, Depends, HTTPException
+from pydantic import BaseModel, Field
+from shared.security import current_user, admin
 
-INSTANCE_ID = os.getenv("INSTANCE_ID", "catalog-unknown")
-SERVICE_PORT = int(os.getenv("PORT", 8002))
-CONSUL_URL = os.getenv("CONSUL_URL", "http://consul:8500")
-SERVICE_HOST = os.getenv("SERVICE_HOST", "localhost")
-
-products_db = {
-    1: {"id": 1, "name": "Gaming Laptop", "price": 1500},
-    2: {"id": 2, "name": "Mechanical Keyboard", "price": 150}
-}
-
-class ProductCreate(BaseModel):
-    name: str
-    price: float
-
-def register_to_consul():
-    payload = {
-        "ID": INSTANCE_ID,
-        "Name": "catalog-service",
-        "Address": SERVICE_HOST,
-        "Port": SERVICE_PORT,
-        "Check": {
-            "HTTP": f"http://{SERVICE_HOST}:{SERVICE_PORT}/health",
-            "Interval": "10s"
-        }
-    }
-    try:
-        response = requests.put(f"{CONSUL_URL}/v1/agent/service/register", json=payload)
-        print(f"[Consul] Регистрация {INSTANCE_ID} успешна: {response.status_code}")
-    except Exception as e:
-        print(f"[Consul] Ошибка регистрации {INSTANCE_ID}: {e}")
-
-def deregister_from_consul():
-    try:
-        response = requests.put(f"{CONSUL_URL}/v1/agent/service/deregister/{INSTANCE_ID}")
-        print(f"[Consul] Дерегистрация {INSTANCE_ID} успешна: {response.status_code}")
-    except Exception as e:
-        print(f"[Consul] Ошибка дерегистрации {INSTANCE_ID}: {e}")
+DB = os.getenv('CATALOG_DB', '/data/catalog.db')
+INSTANCE = os.getenv('INSTANCE_ID', 'catalog')
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    register_to_consul()
+async def lifespan(app):
+    Path(DB).parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(DB) as db:
+        db.execute('PRAGMA journal_mode=WAL')
+        db.execute('CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price REAL)')
+        db.executemany('INSERT OR IGNORE INTO products VALUES(?,?,?)', [(1, 'Gaming Laptop', 1500), (2, 'Mechanical Keyboard', 150)])
     yield
-    deregister_from_consul()
 
-app = FastAPI(title="Catalog Service", lifespan=lifespan, root_path="/catalog")
+app = FastAPI(title='Catalog RBAC', lifespan=lifespan, root_path='/catalog')
 
-@app.get("/health")
-def health_check():
-    return {"status": "healthy", "instance": INSTANCE_ID}
+class ProductCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    price: float = Field(gt=0, allow_inf_nan=False)
 
-@app.get("/products")
-def get_products():
-    return {"instance_id": INSTANCE_ID, "products": list(products_db.values())}
+@app.get('/health')
+def health():
+    return {'status': 'healthy', 'instance': INSTANCE}
 
-@app.post("/products")
-def create_product(product: ProductCreate):
-    new_id = max(products_db.keys(), default=0) + 1
-    products_db[new_id] = {"id": new_id, "name": product.name, "price": product.price}
-    return {"instance_id": INSTANCE_ID, "product": products_db[new_id]}
+@app.get('/products', dependencies=[Depends(current_user)])
+def products():
+    with sqlite3.connect(DB) as db:
+        return {'instance_id': INSTANCE, 'products': [dict(zip(('id', 'name', 'price'), row)) for row in db.execute('SELECT * FROM products ORDER BY id')]}
 
-@app.put("/products/{product_id}")
-def update_product(product_id: int, product: ProductCreate):
-    if product_id not in products_db:
-        raise HTTPException(status_code=404, detail="Product not found")
-    products_db[product_id].update({"name": product.name, "price": product.price})
-    return {"instance_id": INSTANCE_ID, "product": products_db[product_id]}
+@app.post('/products', status_code=201, dependencies=[Depends(admin)])
+def create(body: ProductCreate):
+    with sqlite3.connect(DB) as db:
+        cursor = db.execute('INSERT INTO products(name,price) VALUES(?,?)', (body.name, body.price))
+        return {'instance_id': INSTANCE, 'product': {'id': cursor.lastrowid, **body.model_dump()}}
 
-@app.delete("/products/{product_id}")
-def delete_product(product_id: int):
-    if product_id not in products_db:
-        raise HTTPException(status_code=404, detail="Product not found")
-    del products_db[product_id]
-    return {"instance_id": INSTANCE_ID, "message": "Product deleted"}
+@app.put('/products/{product_id}', dependencies=[Depends(admin)])
+def update(product_id: int, body: ProductCreate):
+    with sqlite3.connect(DB) as db:
+        if not db.execute('UPDATE products SET name=?,price=? WHERE id=?', (body.name, body.price, product_id)).rowcount:
+            raise HTTPException(404, 'Product not found')
+    return {'product': {'id': product_id, **body.model_dump()}}
+
+@app.delete('/products/{product_id}', dependencies=[Depends(admin)])
+def delete(product_id: int):
+    with sqlite3.connect(DB) as db:
+        if not db.execute('DELETE FROM products WHERE id=?', (product_id,)).rowcount:
+            raise HTTPException(404, 'Product not found')
+    return {'deleted': product_id}
