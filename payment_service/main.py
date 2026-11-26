@@ -1,3 +1,5 @@
+from shared.payment_events import payment_stream
+from contextlib import suppress
 import os, json, uuid, asyncio, random
 import requests, aio_pika
 from contextlib import asynccontextmanager
@@ -125,7 +127,11 @@ async def start_consumer_with_retry(attempts: int = 15, delay: float = 2.0):
 async def lifespan(app):
     serve_grpc()
     await start_consumer_with_retry()
+    worker = asyncio.create_task(payment_stream("payment",None))
     yield
+    worker.cancel()
+    with suppress(asyncio.CancelledError):
+        await worker
     if rabbit_conn and not rabbit_conn.is_closed: 
         await rabbit_conn.close()
 
@@ -133,3 +139,5 @@ app = FastAPI(title="Payment Service", lifespan=lifespan, root_path="/payments")
 
 @app.get("/health")
 def health(): return {"status": "healthy"}
+from shared.telemetry import install
+install(app)

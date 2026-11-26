@@ -35,7 +35,11 @@ def router(store):
 
     def save(oid, kind, payload, version):
         try:
-            return store.append(oid, kind, payload, version)
+            from shared.telemetry import orders, cancellations
+            result = store.append(oid, kind, payload, version)
+            if kind == 'OrderCreated': orders.inc()
+            if kind == 'OrderCancelled': cancellations.inc()
+            return result
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 

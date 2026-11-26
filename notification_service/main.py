@@ -1,3 +1,5 @@
+from shared.payment_events import payment_stream
+from contextlib import suppress
 import os, json, asyncio
 import requests, aio_pika
 from contextlib import asynccontextmanager
@@ -83,7 +85,11 @@ async def start_consumer_with_retry(attempts: int = 15, delay: float = 2.0):
 async def lifespan(app):
     register_to_consul()
     await start_consumer_with_retry()
+    worker = asyncio.create_task(payment_stream("notification",lambda event: notifications.append(dict(event=event['eventType'],orderId=event['orderId'],channel='email'))))
     yield
+    worker.cancel()
+    with suppress(asyncio.CancelledError):
+        await worker
     if rabbit_conn and not rabbit_conn.is_closed:
         await rabbit_conn.close()
     deregister_from_consul()
@@ -95,3 +101,5 @@ def health(): return {"status": "healthy", "instance": INSTANCE_ID}
 
 @app.get("/")
 def list_notifications(): return {"notifications": notifications}
+from shared.telemetry import install
+install(app)

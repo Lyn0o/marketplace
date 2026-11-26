@@ -1,0 +1,30 @@
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: auth
+    static_configs:
+      - targets: ['auth:8001']
+  - job_name: catalog-1
+    static_configs:
+      - targets: ['catalog-1:8002']
+  - job_name: catalog-2
+    static_configs:
+      - targets: ['catalog-2:8002']
+  - job_name: order
+    static_configs:
+      - targets: ['order:8003']
+  - job_name: payment
+    static_configs:
+      - targets: ['payment:8004']
+  - job_name: notification
+    static_configs:
+      - targets: ['notification:8006']
+  - job_name: analytics
+    static_configs:
+      - targets: ['analytics:8007']
+  - job_name: gateway
+    static_configs:
+      - targets: ['gateway:8000']
+  - job_name: graphql
+    static_configs:
+      - targets: ['graphql:8005']

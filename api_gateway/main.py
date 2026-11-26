@@ -62,6 +62,8 @@ async def proxy(service: str, path: str, request: Request):
         if privileged and user['role'] != 'admin':
             raise HTTPException(403, 'Admin role required')
     headers = {'authorization': token}
+    from shared.telemetry import propagation
+    propagation.inject(headers)
     if 'content-type' in request.headers:
         headers['content-type'] = request.headers['content-type']
     target_path = '/graphql' if service == 'graphql' else '/' + path
@@ -74,3 +76,6 @@ async def proxy(service: str, path: str, request: Request):
     safe_headers['X-RateLimit-Limit'] = str(LIMIT)
     safe_headers['X-RateLimit-Remaining'] = str(max(0, LIMIT - n))
     return Response(response.content, response.status_code, headers=safe_headers)
+
+from shared.telemetry import install
+install(app)

@@ -123,3 +123,5 @@ app.include_router(graphql_app, prefix="/graphql")
 
 @app.get("/health")
 def health(): return {"status": "healthy", "service": "graphql-gateway"}
+from shared.telemetry import install
+install(app)

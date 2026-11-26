@@ -1,3 +1,29 @@
+# Marketplace · лабораторные работы 7–9
+
+Из корня локальной рабочей копии labs-7-9 выполните команды ниже. Для получения исходного репозитория используется `git clone https://github.com/Lyn0o/marketplace.git`. Изменения лабораторных находятся в локальной ветке labs-7-9.
+
+```powershell
+Copy-Item .env.example .env
+# В .env задайте JWT_SECRET (32+ символа), ADMIN_PASSWORD (12+) и POSTGRES_PASSWORD.
+# Для воспроизведения нагрузки задайте RATE_LIMIT=20000 и RATE_WINDOW=60.
+docker-compose up -d --build
+python scripts/check_labs.py
+docker run --rm --network labs79_default --mount "type=bind,source=$($PWD.Path)/load,target=/load,readonly" grafana/k6:0.55.0 run /load/order.js
+```
+
+API через http://127.0.0.1:18080. Регистрация и вход — POST /auth/register и /auth/login. С JWT пользователя — GET /catalog/products, POST /orders, GET /orders/{id}. С JWT администратора — GET /analytics/summary. OpenAPI сервиса — /auth/openapi.json.
+
+[Архитектура и порты](ARCHITECTURE.md) · [Технический дашборд](http://127.0.0.1:13000/d/technical) · [Бизнес-дашборд](http://127.0.0.1:13000/d/business) · [Jaeger](http://127.0.0.1:16686) · [Prometheus](http://127.0.0.1:19090).
+
+## Нагрузочный тест
+
+k6, 30 с до 20 VU, 60 с до 50 VU, 30 с до 0 VU. За итерацию — вход, создание заказа и пауза 1 с. 2491 HTTP-запрос, 1245 заказов, 20,60 запроса/с в среднем, 10,30 заказа/с. Ошибок 0. Пик за секундное окно — 48 запросов/с. p50 / p95 / p99 — 575 / 1989 / 2869 мс (округлённо). p95 входа — 2324 мс, заказа — 1163 мс. Наибольшая задержка наблюдалась при входе, где выполняется проверка bcrypt.
+
+![Графики k6](reports/labs79/load.png)
+![Grafana во время теста](reports/labs79/technical.png)
+
+## Предыдущие лабораторные
+
 # Marketplace — лабораторная работа 6
 
 CQRS и Event Sourcing для заказов, Kafka и отдельный Analytics Service.

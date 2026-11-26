@@ -1,0 +1,114 @@
+{
+    "metrics": {
+        "http_req_duration": {
+            "p(99)": 2869.379197999998,
+            "med": 574.785001,
+            "p(95)": 1988.6247115
+        },
+        "data_sent": {
+            "count": 920266,
+            "rate": 7610.399775357243
+        },
+        "iteration_duration": {
+            "p(99)": 4878.45468224,
+            "med": 2398.41031,
+            "p(95)": 4027.3841725999996
+        },
+        "http_req_receiving": {
+            "med": 0.14846,
+            "p(95)": 0.6700925,
+            "p(99)": 1.9708994999999967
+        },
+        "iterations": {
+            "count": 1245,
+            "rate": 10.295879365661415
+        },
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 2491,
+            "value": 0
+        },
+        "http_req_duration{expected_response:true}": {
+            "med": 574.785001,
+            "p(95)": 1988.6247115,
+            "p(99)": 2869.379197999998
+        },
+        "http_req_sending": {
+            "med": 0.035706,
+            "p(95)": 0.1499375,
+            "p(99)": 0.7132614999999993
+        },
+        "http_req_blocked": {
+            "p(95)": 0.036155,
+            "p(99)": 0.5351347999999996,
+            "med": 0.0083
+        },
+        "http_req_waiting": {
+            "med": 574.42134,
+            "p(95)": 1988.396782,
+            "p(99)": 2869.0872672999976
+        },
+        "data_received": {
+            "count": 1234111,
+            "rate": 10205.829702679337
+        },
+        "http_reqs": {
+            "count": 2491,
+            "rate": 20.60002851394585
+        },
+        "http_req_connecting": {
+            "med": 0,
+            "p(95)": 0,
+            "p(99)": 0.37407179999999984
+        },
+        "checks": {
+            "passes": 2490,
+            "fails": 0,
+            "value": 1
+        },
+        "http_req_tls_handshaking": {
+            "p(95)": 0,
+            "p(99)": 0,
+            "med": 0
+        },
+        "vus": {
+            "value": 3,
+            "min": 1,
+            "max": 50
+        },
+        "vus_max": {
+            "value": 50,
+            "min": 50,
+            "max": 50
+        }
+    },
+    "setup_data": {
+        "account": {
+            "email": "load1795692762819@example.test",
+            "password": "Lab9-demo-password"
+        },
+        "id": "e2465821-dfce-4b83-a4d4-558d6dd6dd06"
+    },
+    "root_group": {
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {},
+        "checks": {
+                "login 200": {
+                    "fails": 0,
+                    "name": "login 200",
+                    "path": "::login 200",
+                    "id": "48b06dc5cde7f6ebb606ad7da726a2a5",
+                    "passes": 1245
+                },
+                "order 201": {
+                    "id": "147921ac4c62a52b378e73da3bffea16",
+                    "passes": 1245,
+                    "fails": 0,
+                    "name": "order 201",
+                    "path": "::order 201"
+                }
+            },
+        "name": ""
+    }
+}

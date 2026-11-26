@@ -1,3 +1,4 @@
+from shared.payment_events import payment_stream
 import asyncio
 import json
 import logging
@@ -34,10 +35,16 @@ async def publish_events():
             await producer.stop()
 
 
+def confirm(event):
+    state = store.replay(event['orderId'])
+    if state and state['status']=='CREATED':
+        store.append(event['orderId'],'OrderPaid',dict(paidAmount=event['amount'],paymentMethod='card',automatic=True),state['version'])
+
+
 @asynccontextmanager
 async def lifespan(app):
     store.rebuild()
-    tasks = [asyncio.create_task(publish_events()),
+    tasks = [asyncio.create_task(payment_stream("order",confirm)), asyncio.create_task(publish_events()),
              asyncio.create_task(consume_events('orders-read-model-group', store.project))]
     try:
         yield
@@ -62,6 +69,9 @@ def check_payment(order_id: str, amount: float = 100, simulate_failure: bool = F
     from order_service.grpc_client import safe_check_payment
     return safe_check_payment(order_id, amount, simulate_failure)
 
+
+from shared.telemetry import install
+install(app)
 
 app.include_router(commands.router(store))
 app.include_router(queries.router(store))

@@ -1,0 +1,125 @@
+{
+  "register": [
+    201,
+    {
+      "id": "b2102cda-184e-4cab-b564-ed85699126f5",
+      "email": "student-4f4712@example.test",
+      "role": "user"
+    }
+  ],
+  "login": [
+    200,
+    {
+      "access_token": "eyJhbGciOiJIUzI1NiIsInR5c…[сокращено]",
+      "token_type": "bearer",
+      "expires_in": 1800
+    },
+    {
+      "sub": "b2102cda-184e-4cab-b564-ed85699126f5",
+      "role": "user",
+      "iat": 1795692519,
+      "exp": 1795694319,
+      "iss": "marketplace-auth",
+      "aud": "marketplace"
+    }
+  ],
+  "negative_login": [
+    401,
+    {
+      "detail": "Invalid credentials"
+    }
+  ],
+  "before": [
+    200,
+    {
+      "total_orders": 0,
+      "paid_amount": 0,
+      "status_counts": {
+        "CREATED": 0,
+        "PAID": 0,
+        "CANCELLED": 0
+      },
+      "average_order_amount": 0
+    }
+  ],
+  "catalog": [
+    200,
+    {
+      "instance_id": "catalog-1",
+      "products": [
+        {
+          "id": 1,
+          "name": "Gaming Laptop",
+          "price": 1500.0
+        },
+        {
+          "id": 2,
+          "name": "Mechanical Keyboard",
+          "price": 150.0
+        }
+      ]
+    }
+  ],
+  "create": [
+    201,
+    {
+      "userId": "b2102cda-184e-4cab-b564-ed85699126f5",
+      "items": [
+        {
+          "productId": "1",
+          "quantity": 1
+        }
+      ],
+      "totalAmount": 1500.0,
+      "orderId": "c71bb100-323a-4cb4-9bc4-f38f0bda9199",
+      "createdAt": "2026-11-26T11:28:40.027645+00:00",
+      "status": "CREATED",
+      "version": 1
+    }
+  ],
+  "confirmed": [
+    200,
+    {
+      "userId": "b2102cda-184e-4cab-b564-ed85699126f5",
+      "items": [
+        {
+          "productId": "1",
+          "quantity": 1
+        }
+      ],
+      "totalAmount": 1500.0,
+      "orderId": "c71bb100-323a-4cb4-9bc4-f38f0bda9199",
+      "createdAt": "2026-11-26T11:28:40.027645Z",
+      "status": "CONFIRMED",
+      "version": 2,
+      "paidAmount": 1500.0,
+      "paymentMethod": "card"
+    }
+  ],
+  "after": [
+    200,
+    {
+      "total_orders": 1,
+      "paid_amount": 1500.0,
+      "status_counts": {
+        "CREATED": 0,
+        "PAID": 1,
+        "CANCELLED": 0
+      },
+      "average_order_amount": 1500.0
+    }
+  ],
+  "notification": [
+    {
+      "event": "PaymentCompleted",
+      "orderId": "c71bb100-323a-4cb4-9bc4-f38f0bda9199",
+      "channel": "email"
+    }
+  ],
+  "missing": [
+    404,
+    {
+      "detail": "Order not found"
+    }
+  ]
+}

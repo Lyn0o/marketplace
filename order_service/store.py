@@ -11,7 +11,7 @@ def evolve(state, event):
     if event["eventType"] == "OrderCreated":
         state = {**data, "orderId": event["orderId"], "createdAt": event["timestamp"], "status": "CREATED"}
     elif event["eventType"] == "OrderPaid":
-        state = {**state, "status": "PAID", "paidAmount": data["paidAmount"], "paymentMethod": data["paymentMethod"]}
+        state = {**state, "status": "CONFIRMED" if data.get("automatic") else "PAID", "paidAmount": data["paidAmount"], "paymentMethod": data["paymentMethod"]}
     elif event["eventType"] == "OrderCancelled":
         state = {**state, "status": "CANCELLED", "reason": data["reason"]}
     return {**state, "version": event["version"]}
@@ -56,6 +56,9 @@ class EventStore:
                 raise ValueError("Concurrent order update")
             event = {"eventId": str(uuid.uuid4()), "orderId": oid, "eventType": kind,
                      "version": expected_version + 1, "timestamp": datetime.now(timezone.utc).isoformat(), "payload": data}
+            from shared.telemetry import propagation
+            event["context"] = {}
+            propagation.inject(event["context"])
             state = None
             for row in rows:
                 state = evolve(state, json.loads(row[0]))

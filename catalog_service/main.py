@@ -53,3 +53,6 @@ def delete(product_id: int):
         if not db.execute('DELETE FROM products WHERE id=?', (product_id,)).rowcount:
             raise HTTPException(404, 'Product not found')
     return {'deleted': product_id}
+
+from shared.telemetry import install
+install(app)

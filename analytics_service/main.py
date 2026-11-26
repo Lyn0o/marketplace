@@ -33,3 +33,6 @@ def health():
 @app.get('/summary', dependencies=[Depends(admin)])
 def summary():
     return projection.summary()
+
+from shared.telemetry import install
+install(app)
